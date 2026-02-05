@@ -14,50 +14,17 @@ L.Icon.Default.mergeOptions({
   shadowUrl: markerShadow,
 });
 
-const MapComponent = ({ currentLocation, pickup, drop, onSelectLocation, mode }) => {
-  const mapRef = useRef(null);
-  const mapInstanceRef = useRef(null);
-  const markersRef = useRef({ current: null, pickup: null, drop: null });
-  const onSelectLocationRef = useRef(onSelectLocation);
+const MapComponent = ({ currentLocation, pickup, drop, onSelectLocation, mode, recenterTrigger }) => {
+  // ... existing refs ...
 
-  // Keep ref updated with latest callback
-  useEffect(() => {
-    onSelectLocationRef.current = onSelectLocation;
-  }, [onSelectLocation]);
+  // ... existing init effect ...
 
-  // Initialize Map
-  useEffect(() => {
-    if (!mapRef.current || mapInstanceRef.current) return;
-
-    const initialCenter = currentLocation ? [currentLocation.lat, currentLocation.lng] : [20.5937, 78.9629];
-    
-    const map = L.map(mapRef.current).setView(initialCenter, 13);
-    
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(map);
-
-    mapInstanceRef.current = map;
-
-    // Click Handler - Uses Ref to access latest closure
-    map.on('click', (e) => {
-        if (onSelectLocationRef.current) {
-            onSelectLocationRef.current(e.latlng);
-        }
-    });
-
-    return () => {
-      map.remove();
-      mapInstanceRef.current = null;
-    };
-  }, []); // Run once on mount
-
-  // Update Center when location changes
+  // Update Center when location changes OR when triggered explicitly
   useEffect(() => {
       if (mapInstanceRef.current && currentLocation) {
-           mapInstanceRef.current.flyTo([currentLocation.lat, currentLocation.lng], 13);
+           mapInstanceRef.current.flyTo([currentLocation.lat, currentLocation.lng], 18); // Close zoom for recenter (18 is closer)
       }
-  }, [currentLocation]);
+  }, [currentLocation, recenterTrigger]); // Add trigger dependency
 
   // Handle Markers
   useEffect(() => {

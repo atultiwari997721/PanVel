@@ -16,7 +16,7 @@ const Home = () => {
     const [mode, setMode] = useState('pickup'); // 'pickup' or 'drop'
     const [distance, setDistance] = useState(0);
     const [fare, setFare] = useState(0);
-    const [status, setStatus] = useState('idle'); // idle, finding_driver, driver_found, riding
+    const [recenterTrigger, setRecenterTrigger] = useState(0);
 
     useEffect(() => {
         // Get Users Location
@@ -38,12 +38,12 @@ const Home = () => {
         socket.on('ride_accepted', (data) => {
             console.log('Ride accepted:', data);
             setStatus('driver_found');
-            alert(`Driver found! Driver ID: ${data.driverId}`);
+            // alert removed as per user request, maybe use a toast later
         });
 
         socket.on('no_drivers_found', () => {
              setStatus('idle');
-             alert('No drivers available nearby. Please try again later.');
+             alert('No drivers available nearby. Please try again later.'); // Keep this for error
         });
 
         return () => {
@@ -75,12 +75,13 @@ const Home = () => {
     const resetPickupToCurrent = () => {
         if (currentLocation) {
             setPickup(currentLocation);
+            setRecenterTrigger(prev => prev + 1);
             // If drop exists, recalculate
             if (drop) {
                 calculateFare(currentLocation, drop);
             }
         } else {
-            alert('Fetching your location... Please wait.');
+             // alert removed
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(
                     (position) => {
@@ -88,11 +89,10 @@ const Home = () => {
                          const loc = { lat: latitude, lng: longitude };
                          setCurrentLocation(loc);
                          setPickup(loc);
-                         alert('Location updated!');
+                         setRecenterTrigger(prev => prev + 1);
                     },
                     (err) => {
                         console.error(err);
-                        alert('Could not get location. Ensure GPS is on.');
                     }
                 );
             }
@@ -102,9 +102,9 @@ const Home = () => {
     const handleLocationSelect = useCallback((latlng) => {
         console.log('Selected Location:', latlng, 'Mode:', mode);
         if (mode === 'pickup') {
-            setPickup({ lat: latlng.lat, lng: latlng.lng });
+            setPickup({ lat: latlng.lat, lng: latlng.lng, address: latlng.address }); // Preserve address if from search
         } else {
-            setDrop({ lat: latlng.lat, lng: latlng.lng });
+            setDrop({ lat: latlng.lat, lng: latlng.lng, address: latlng.address });
             if (pickup) {
                 calculateFare(pickup, { lat: latlng.lat, lng: latlng.lng });
             }
@@ -124,8 +124,8 @@ const Home = () => {
         setStatus('finding_driver');
         socket.emit('request_ride', {
             riderId: user.id,
-            pickup: { ...pickup, address: 'Map Location' },
-            drop: { ...drop, address: 'Map Location' },
+            pickup: { ...pickup, address: pickup.address || 'Map Location' },
+            drop: { ...drop, address: drop.address || 'Map Location' },
             fare: fare,
             distance: distance
         });
@@ -141,9 +141,10 @@ const Home = () => {
                     drop={drop}
                     onSelectLocation={handleLocationSelect}
                     mode={mode}
+                    recenterTrigger={recenterTrigger}
                 />
             </div>
-
+            
             {/* Top Bar - Mobile Friendly */}
             <div className="absolute top-0 left-0 right-0 z-10 pt-safe-top px-4 pb-2 flex justify-between items-start pointer-events-none mt-2">
                 <div className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full shadow-lg pointer-events-auto">
@@ -167,33 +168,17 @@ const Home = () => {
             <div className="absolute bottom-0 left-0 right-0 z-10 bg-white rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.15)] p-6 pb-safe-bottom transition-all duration-300 pointer-events-auto max-h-[45vh] overflow-y-auto">
                 {/* Drag Handle Indicator */}
                 <div className="w-12 h-1.5 bg-gray-300 rounded-full mx-auto mb-6"></div>
-
+                
+                {status === 'idle' && (
+                    <LocationSearch 
+                        placeholder={mode === 'pickup' ? "Search Pickup Location" : "Search Drop Location"} 
+                        onLocationSelect={handleLocationSelect}
+                    />
+                )}
+                
                 {status === 'idle' ? (
                      <div className="space-y-4">
-                        <div className="flex gap-3">
-                            <div className="flex-1 flex flex-col gap-2">
-                                <button 
-                                    onClick={() => setMode('pickup')} 
-                                    className={`w-full py-3 rounded-xl font-medium text-sm border-2 transition-colors ${mode === 'pickup' ? 'bg-black text-white border-black' : 'bg-gray-50 text-gray-600 border-transparent'}`}
-                                >
-                                    <span className="block text-xs opacity-70">Step 1</span>
-                                    Set Pickup
-                                </button>
-                                {mode === 'pickup' && (
-                                    <button onClick={resetPickupToCurrent} className="text-xs text-blue-600 font-bold flex items-center justify-center gap-1">
-                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                                        Use Current Location
-                                    </button>
-                                )}
-                            </div>
-                            <button 
-                                onClick={() => setMode('drop')} 
-                                className={`flex-1 py-3 rounded-xl font-medium text-sm border-2 transition-colors ${mode === 'drop' ? 'bg-black text-white border-black' : 'bg-gray-50 text-gray-600 border-transparent'} h-fit`}
-                            >
-                                <span className="block text-xs opacity-70">Step 2</span>
-                                Set Drop
-                            </button>
-                        </div>
+// ... existing UI ...
 
                         {distance > 0 && (
                             <div className="bg-gradient-to-r from-gray-50 to-gray-100 p-4 rounded-2xl border border-gray-200 flex justify-between items-center shadow-sm">
