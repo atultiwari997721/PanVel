@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import io from 'socket.io-client';
 
 const AdminDashboard = () => {
     const [rides, setRides] = useState([]);
@@ -9,35 +10,64 @@ const AdminDashboard = () => {
     useEffect(() => {
         fetchData();
         
-        // Subscription for real-time updates
-        const ridesSub = supabase
-            .channel('public:rides')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'rides' }, fetchData)
-            .subscribe();
+        // Socket.io Real-time Updates
+        const socket = io(import.meta.env.VITE_API_URL, { path: '/socket.io' });
+        
+        socket.emit('join_admin');
+
+        socket.on('ride_updated', (updatedRide) => {
+            console.log("Admin: Ride Updated", updatedRide);
+            setRides(prev => {
+                const index = prev.findIndex(r => r.id === updatedRide.id);
+                if (index >= 0) {
+                    const newRides = [...prev];
+                    newRides[index] = updatedRide;
+                    return newRides.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+                } else {
+                    return [updatedRide, ...prev];
+                }
+            });
+        });
+
+        socket.on('driver_updated', (updatedDriver) => {
+             setDrivers(prev => {
+                 const index = prev.findIndex(d => d.id === updatedDriver.id);
+                 if (index >= 0) {
+                     const newDrivers = [...prev];
+                     newDrivers[index] = { ...newDrivers[index], ...updatedDriver };
+                     return newDrivers;
+                 }
+                 return prev;
+             });
+        });
 
         return () => {
-            supabase.removeChannel(ridesSub);
+            socket.disconnect();
         };
+    }, []);
+
+    // Fallback: Poll every 5 seconds to ensure data consistency
+    useEffect(() => {
+        const interval = setInterval(() => {
+             fetchData();
+        }, 5000);
+        return () => clearInterval(interval);
     }, []);
 
     const fetchData = async () => {
         setLoading(true);
-        // Fetch Rides
-        const { data: ridesData, error: ridesError } = await supabase
-            .from('rides')
-            .select('*')
-            .order('created_at', { ascending: false });
-        
-        if (ridesData) setRides(ridesData);
-
-        // Fetch Drivers
-        const { data: driversData, error: driversError } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('user_type', 'partner');
-        
-        if (driversData) setDrivers(driversData);
-        setLoading(false);
+        try {
+            const response = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/dashboard`);
+            const data = await response.json();
+            
+            if (data.rides) setRides(data.rides);
+            if (data.drivers) setDrivers(data.drivers);
+        } catch (error) {
+            console.error("Error fetching dashboard data:", error);
+            // alert("Failed to load dashboard data"); // Silenced repeated alerts
+        } finally {
+            setLoading(false);
+        }
     };
 
     const cancelRide = async (rideId) => {
@@ -56,25 +86,73 @@ const AdminDashboard = () => {
         alert('Reassign feature would open a modal to select from: ' + drivers.map(d => d.email).join(', '));
     };
 
+    const [newPartner, setNewPartner] = useState({ mobile: '', fullName: '', password: '', vehicleModel: '', vehiclePlate: '' });
+    const [createdPartnerId, setCreatedPartnerId] = useState(null);
+
+    const handleCreatePartner = async (e) => {
+        e.preventDefault();
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/create-partner`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mobile: newPartner.mobile,
+                    password: newPartner.password,
+                    fullName: newPartner.fullName,
+                    vehicleDetails: { model: newPartner.vehicleModel, plate: newPartner.vehiclePlate }
+                })
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error);
+            
+            setCreatedPartnerId(data.partnerId);
+            setNewPartner({ mobile: '', fullName: '', password: '', vehicleModel: '', vehiclePlate: '' });
+            alert(`Partner Created! ID: ${data.partnerId}`);
+            fetchData();
+        } catch (error) {
+            alert(error.message);
+        }
+    };
+
     return (
         <div className="min-h-screen bg-gray-100 p-8">
             <h1 className="text-3xl font-bold mb-8">PanVel Admin</h1>
 
+            {/* Create Partner Form */}
+            <div className="bg-white p-6 rounded-xl shadow mb-8">
+                <h2 className="text-xl font-bold mb-4">Create New Partner</h2>
+                {createdPartnerId && (
+                    <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded relative mb-4">
+                        <strong className="font-bold">Success! </strong>
+                        <span className="block sm:inline">Partner Created. Give them this 12-digit ID to login:</span>
+                        <div className="text-3xl font-mono font-black mt-2 select-all">{createdPartnerId}</div>
+                    </div>
+                )}
+                <form onSubmit={handleCreatePartner} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <input type="text" placeholder="Full Name" className="p-2 border rounded" required value={newPartner.fullName} onChange={e => setNewPartner({...newPartner, fullName: e.target.value})} />
+                    <input type="tel" placeholder="Mobile Number" className="p-2 border rounded" required value={newPartner.mobile} onChange={e => setNewPartner({...newPartner, mobile: e.target.value})} />
+                    <input type="password" placeholder="Password" className="p-2 border rounded" required value={newPartner.password} onChange={e => setNewPartner({...newPartner, password: e.target.value})} />
+                    <input type="text" placeholder="Vehicle Model (e.g. Swift)" className="p-2 border rounded" required value={newPartner.vehicleModel} onChange={e => setNewPartner({...newPartner, vehicleModel: e.target.value})} />
+                    <input type="text" placeholder="Vehicle Plate (MH 01 AB 1234)" className="p-2 border rounded" required value={newPartner.vehiclePlate} onChange={e => setNewPartner({...newPartner, vehiclePlate: e.target.value})} />
+                    <button type="submit" className="bg-black text-white px-4 py-2 rounded font-bold hover:bg-gray-800">Create Partner</button>
+                </form>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                {/* Active Rides & History */}
+                {/* Active Rides */}
                 <div className="bg-white p-6 rounded-xl shadow">
                     <h2 className="text-xl font-bold mb-4">Rides</h2>
                     {loading ? <p>Loading...</p> : (
                         <div className="space-y-4 max-h-[600px] overflow-y-auto">
                             {rides.map(ride => (
-                                <div key={ride.id} className="border p-4 rounded-lg flex justify-between items-center">
+                                <div key={ride.id} className={`border p-4 rounded-lg flex justify-between items-center ${ride.status === 'cancelled' ? 'bg-gray-200 opacity-75' : 'bg-white'}`}>
                                     <div>
                                         <p className="font-bold">{ride.pickup_address || 'Map Loc'} ➔ {ride.drop_address || 'Map Loc'}</p>
                                         <p className="text-sm text-gray-500">Status: <span className={`font-bold ${
                                             ride.status === 'completed' ? 'text-green-600' :
                                             ride.status === 'cancelled' ? 'text-red-600' :
                                             'text-blue-600'
-                                        }`}>{ride.status}</span></p>
+                                        }`}>{ride.status === 'cancelled' ? 'Canceled by User' : ride.status}</span></p>
                                         <p className="text-xs text-gray-400">ID: {ride.id.slice(0, 8)}...</p>
                                         <p className="text-sm">Fare: ₹{ride.fare}</p>
                                     </div>
@@ -87,7 +165,6 @@ const AdminDashboard = () => {
                                                 Cancel
                                             </button>
                                         )}
-                                        {/* <button onClick={() => reassignRide(ride.id)} className="text-xs text-blue-500 underline">Reassign</button> */}
                                     </div>
                                 </div>
                             ))}
@@ -99,12 +176,13 @@ const AdminDashboard = () => {
                 {/* Driver Data */}
                 <div className="bg-white p-6 rounded-xl shadow">
                     <h2 className="text-xl font-bold mb-4">Partners ({drivers.length})</h2>
-                    <div className="space-y-4">
+                    <div className="space-y-4 max-h-[600px] overflow-y-auto">
                         {drivers.map(driver => (
                             <div key={driver.id} className="flex justify-between items-center border-b pb-2">
                                 <div>
                                     <p className="font-medium">{driver.full_name || driver.email || 'Unknown'}</p>
-                                    <p className="text-xs text-gray-500">ID: {driver.id.slice(0, 8)}...</p>
+                                    <p className="text-xs text-gray-500">Mobile: {driver.mobile}</p>
+                                    <p className="text-xs font-mono bg-gray-100 inline p-1 rounded">ID: {driver.partner_unique_id || 'N/A'}</p>
                                 </div>
                                 <div className={`px-2 py-1 rounded text-xs ${driver.is_online ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
                                     {driver.is_online ? 'Online' : 'Offline'}

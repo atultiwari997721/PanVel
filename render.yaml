@@ -1,0 +1,32 @@
+services:
+  # Backend Service
+  - type: web
+    name: panvel-backend
+    env: node
+    plan: free
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && node server.js
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: CLIENT_URL
+        fromService:
+          type: web
+          name: panvel-frontend
+          property: url
+
+  # Frontend Service
+  - type: web
+    name: panvel-frontend
+    env: static
+    plan: free
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: panvel-backend
+          property: url

@@ -1,8 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 
 module.exports = (io, supabase) => {
-  const activeDrivers = {}; // socketId -> driverId mapping?? Or just use rooms.
-  // Actually, we can join drivers to a 'drivers' room if they are online.
 
   io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
@@ -13,38 +11,58 @@ module.exports = (io, supabase) => {
       console.log(`Socket ${socket.id} joined room ${userId}`);
     });
 
+    // Admin joins admin room
+    socket.on('join_admin', () => {
+        socket.join('admin');
+        console.log(`Socket ${socket.id} joined admin room`);
+    });
+
     // Driver goes online
     socket.on('driver_online', async ({ driverId, location }) => {
-        // location: { lat, lng }
         try {
             await supabase.from('profiles').update({
                 is_online: true,
                 current_location: `POINT(${location.lng} ${location.lat})`
             }).eq('id', driverId);
             
-            socket.join('drivers'); // Join generic drivers room? 
-            // Better: We will query nearest drivers and emit to their specific IDs.
+            // Notify Admin of driver update
+            io.to('admin').emit('driver_updated', { id: driverId, is_online: true, lat: location.lat, lng: location.lng });
         } catch (e) {
             console.error('Error going online:', e);
         }
     });
 
     // Driver location update (frequent)
-    socket.on('update_location', async ({ driverId, location }) => {
-        // Debounce database updates in production!
-        // For now, update DB directly or Redis. 
-        // We'll update Supabase for simplicity as per prompt.
+    socket.on('update_location', async ({ driverId, location, riderId }) => {
         await supabase.from('profiles').update({
             current_location: `POINT(${location.lng} ${location.lat})`
         }).eq('id', driverId);
+
+        // 2. Direct emit to Rider if in a ride
+        if (riderId) {
+            io.to(riderId).emit('driver_location_update', location);
+        }
     });
 
     // User requests a ride
     socket.on('request_ride', async (rideData) => {
-        // rideData: { riderId, pickup: {lat, lng}, drop: {lat, lng}, fare, distance }
         console.log('Ride requested', rideData);
-
         try {
+            // 0. SELF-HEALING: Ensure Rider Profile Exists (Fix Foreign Key Error)
+            const { data: profileCheck } = await supabase.from('profiles').select('id').eq('id', rideData.riderId).single();
+            
+            if (!profileCheck) {
+                console.log(`Self-Healing: Creating missing profile for ${rideData.riderId}`);
+                await supabase.from('profiles').insert({
+                    id: rideData.riderId,
+                    email: `healed_${rideData.riderId.slice(0,4)}@panvel.app`,
+                    mobile: '0000000000',
+                    full_name: 'Recovered User',
+                    user_type: 'user',
+                    is_online: true
+                });
+            }
+
             // 1. Create Ride Record in DB
             const { data: ride, error } = await supabase.from('rides').insert({
                 rider_id: rideData.riderId,
@@ -62,6 +80,9 @@ module.exports = (io, supabase) => {
             if (error) throw error;
 
             console.log('Ride created:', ride.id);
+            
+            // Notify Admin
+            io.to('admin').emit('ride_updated', ride);
 
             // 2. Find Nearest Drivers (within 5km)
             const { data: drivers, error: driversError } = await supabase.rpc('get_nearest_drivers', {
@@ -80,7 +101,6 @@ module.exports = (io, supabase) => {
             // 3. Notify Drivers
             if (drivers && drivers.length > 0) {
                 drivers.forEach(driver => {
-                    // Send to driver's personal room (assuming they joined one with their ID)
                     io.to(driver.id).emit('new_ride_request', {
                         rideId: ride.id,
                         riderId: rideData.riderId,
@@ -102,29 +122,55 @@ module.exports = (io, supabase) => {
 
     // Driver Accepts Ride
     socket.on('accept_ride', async ({ driverId, rideId }) => {
-        // Use a transaction or optimistic lock to ensure only one driver accepts
-        // For MERN simplicity: FIFO
         try {
-            // Check if ride is still 'requested'
-            const { data: ride } = await supabase.from('rides').select('status, rider_id').eq('id', rideId).single();
+            const { data: ride } = await supabase.from('rides').select('status, rider_id, pickup_lat, pickup_lng, drop_lat, drop_lng, pickup_address, drop_address, fare, distance_km').eq('id', rideId).single();
+            
             if (ride && ride.status === 'requested') {
-                // Assign Driver
                 const { error } = await supabase.from('rides')
                     .update({ status: 'accepted', driver_id: driverId })
                     .eq('id', rideId);
                 
                 if (!error) {
+                    const updatedRide = { ...ride, id: rideId, status: 'accepted', driver_id: driverId };
+                    
                     // Notify User
-                    io.to(ride.rider_id).emit('ride_accepted', { driverId, rideId });
-                    // Notify other drivers (optional: to remove the popup)
-                    // We'd need to know which drivers received the request originally. 
-                    // For now, client side can check status or timeout.
+                    io.to(ride.rider_id).emit('ride_accepted', { driverId, rideId, ...updatedRide });
+                    
+                    // Notify Admin
+                    io.to('admin').emit('ride_updated', updatedRide);
                 }
             } else {
                 socket.emit('ride_unavailable', { message: 'Ride already taken' });
             }
         } catch (e) {
             console.error('Error accepting ride:', e);
+        }
+    });
+
+    // Driver/User Cancels Ride
+    socket.on('cancel_ride', async ({ rideId, userId, isDriver }) => {
+        try {
+            console.log(`Ride ${rideId} cancelled by ${userId}`);
+            const { data: ride } = await supabase.from('rides').select('rider_id, driver_id, status').eq('id', rideId).single();
+            
+            if (ride && ride.status !== 'completed') {
+                await supabase.from('rides').update({ status: 'cancelled' }).eq('id', rideId);
+                
+                const updatedRide = { ...ride, id: rideId, status: 'cancelled' };
+                
+                // Notify Rider
+                io.to(ride.rider_id).emit('ride_cancelled', { reason: isDriver ? 'Driver cancelled the ride.' : 'You cancelled the ride.' });
+                
+                // Notify Driver (if user cancelled)
+                if (ride.driver_id && !isDriver) {
+                     io.to(ride.driver_id).emit('ride_cancelled', { reason: 'User cancelled the ride.' });
+                }
+
+                // Notify Admin
+                io.to('admin').emit('ride_updated', updatedRide);
+            }
+        } catch (e) {
+            console.error("Error cancelling ride:", e);
         }
     });
 

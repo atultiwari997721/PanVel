@@ -26,9 +26,53 @@ export const AuthProvider = ({ children }) => {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Helper to set session from backend response
+  const handleBackendSession = async (session) => {
+    const { error } = await supabase.auth.setSession(session);
+    if (error) throw error;
+    // User state update handled by onAuthStateChange listener
+  };
+
+  const loginUser = async (mobile, password) => {
+    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/user/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mobile, password }),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+    await handleBackendSession(data.session);
+    return data;
+  };
+
+  const signupUser = async (mobile, password) => {
+    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/user/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mobile, password }),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+    await handleBackendSession(data.session);
+    return data;
+  };
+  
+  const loginPartner = async (partnerId, password) => {
+    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/partner/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ partnerId, password }),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+    await handleBackendSession(data.session);
+    return data;
+  };
+
   const value = {
-    signUp: (data) => supabase.auth.signUp(data),
-    signIn: (data) => supabase.auth.signInWithPassword(data),
+    loginUser,
+    signupUser,
+    loginPartner,
     signOut: () => supabase.auth.signOut(),
     user,
   };

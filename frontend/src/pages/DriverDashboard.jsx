@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import MapComponent from '../components/MapComponent';
 import io from 'socket.io-client';
 
-const socket = io('http://localhost:5000');
+const socket = io(import.meta.env.VITE_API_URL, { path: '/socket.io' });
 
 const DriverDashboard = () => {
     const { user, signOut } = useAuth();
@@ -11,9 +11,45 @@ const DriverDashboard = () => {
     const [location, setLocation] = useState(null);
     const [incomingRide, setIncomingRide] = useState(null); // { rideId, pickup, drop, fare }
     const [activeRide, setActiveRide] = useState(null);
+    const activeRideRef = useRef(null); // Ref to access inside closure
+
+    // Keep Ref synced
+    useEffect(() => { activeRideRef.current = activeRide; }, [activeRide]);
     
     // Watch location ID
     const watchId = useRef(null);
+
+    // Fetch Pending Rides on Mount
+    useEffect(() => {
+        const fetchPendingRides = async () => {
+             try {
+                 const res = await fetch('/api/rides/pending');
+                 const data = await res.json();
+                 
+                 if (data && data.length > 0) {
+                     // Check if it's the SAME ride to avoid re-alerting if we already have it
+                     const r = data[0];
+                     setIncomingRide(prev => {
+                         if (prev && prev.rideId === r.id) return prev;
+                         return {
+                             rideId: r.id,
+                             riderId: r.rider_id,
+                             pickup: { lat: r.pickup_lat, lng: r.pickup_lng, address: r.pickup_address },
+                             drop: { lat: r.drop_lat, lng: r.drop_lng, address: r.drop_address },
+                             fare: r.fare,
+                             distance: r.distance_km
+                         };
+                     });
+                 }
+             } catch (error) {
+                 console.error("Error fetching pending rides:", error);
+             }
+        };
+        fetchPendingRides();
+
+        const interval = setInterval(fetchPendingRides, 5000);
+        return () => clearInterval(interval);
+    }, []);
 
     useEffect(() => {
         if (user) {
@@ -27,8 +63,10 @@ const DriverDashboard = () => {
         });
 
         socket.on('ride_unavailable', () => {
-            alert('Ride was taken by another driver or cancelled.');
-            setIncomingRide(null);
+             // Instead of alert, use a smaller notification via state or console?
+             // alert('Ride was taken...'); // Removed annoying alert
+             console.log("Ride unavailable");
+             setIncomingRide(null);
         });
 
         return () => {
@@ -49,9 +87,10 @@ const DriverDashboard = () => {
                     const loc = { lat: latitude, lng: longitude };
                     setLocation(loc);
 
-                    // Emit to server
+                    // Emit to server (include riderId if in a ride)
+                    const riderId = activeRideRef.current?.riderId;
                     socket.emit('driver_online', { driverId: user.id, location: loc });
-                    socket.emit('update_location', { driverId: user.id, location: loc });
+                    socket.emit('update_location', { driverId: user.id, location: loc, riderId });
                 },
                 (err) => console.error(err),
                 { enableHighAccuracy: true }
@@ -128,8 +167,26 @@ const DriverDashboard = () => {
                 {activeRide && !incomingRide && (
                     <div className="absolute top-4 left-4 right-4 bg-white p-4 rounded-xl shadow-lg z-[1000]">
                         <h3 className="font-bold text-lg">Current Ride</h3>
-                        <p>Navigating to Pickup...</p>
-                        <button onClick={() => setActiveRide(null)} className="mt-2 text-sm text-red-500">Cancel Ride (Debug)</button>
+                        <h3 className="font-bold text-lg">Current Ride</h3>
+                        <a 
+                            href={`https://www.google.com/maps/dir/?api=1&destination=${activeRide.pickup.lat},${activeRide.pickup.lng}`}
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="block w-full text-center bg-blue-600 text-white py-3 rounded-lg font-bold mb-2 shadow-lg"
+                        >
+                            Navigate to Pickup
+                        </a>
+                        <button 
+                            onClick={() => {
+                                if(window.confirm('Cancel this ride?')) {
+                                    socket.emit('cancel_ride', { rideId: activeRide.rideId, userId: user.id, isDriver: true });
+                                    setActiveRide(null);
+                                }
+                            }} 
+                            className="mt-2 text-sm text-red-500 underline w-full"
+                        >
+                            Cancel Ride
+                        </button>
                     </div>
                 )}
             </div>

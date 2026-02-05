@@ -1,23 +1,31 @@
--- Enable PostGIS
+-- FULL DATABASE SCHEMA V3
+-- COPY ALL AND RUN IN SUPABASE SQL EDITOR
+
+-- 1. CLEANUP (Reset)
+DROP FUNCTION IF EXISTS get_nearest_drivers;
+DROP TABLE IF EXISTS public.rides;
+DROP TABLE IF EXISTS public.profiles;
+
+-- 2. EXTENSIONS
 create extension if not exists postgis;
 
--- Create Profiles Table (extends auth.users)
+-- 3. PROFILES TABLE
 create table public.profiles (
   id uuid references auth.users not null primary key,
-  mobile text not null, -- Main identifier
+  mobile text not null, 
   full_name text,
-  email text, -- Optional/Legacy
+  email text, 
   user_type text check (user_type in ('user', 'partner', 'admin')),
-  vehicle_details jsonb, -- Store model, plate, etc.
+  vehicle_details jsonb, 
   is_online boolean default false,
   current_location geography(POINT),
+  partner_unique_id text unique, -- 12-digit ID
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
--- Enable RLS
+-- 4. RLS FOR PROFILES
 alter table public.profiles enable row level security;
 
--- Policies for Profiles
 create policy "Public profiles are viewable by everyone." on public.profiles
   for select using (true);
 
@@ -27,7 +35,7 @@ create policy "Users can insert their own profile." on public.profiles
 create policy "Users can update their own profile." on public.profiles
   for update using (auth.uid() = id);
 
--- Create Rides Table
+-- 5. RIDES TABLE
 create table public.rides (
   id uuid default uuid_generate_v4() primary key,
   rider_id uuid references public.profiles(id) not null,
@@ -44,10 +52,9 @@ create table public.rides (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
--- Enable RLS
+-- 6. RLS FOR RIDES
 alter table public.rides enable row level security;
 
--- Policies for Rides
 create policy "Riders can see their own rides." on public.rides
   for select using (auth.uid() = rider_id);
 
@@ -57,10 +64,10 @@ create policy "Drivers can see available rides." on public.rides
 create policy "Riders can create rides." on public.rides
   for insert with check (auth.uid() = rider_id);
 
-create policy "Drivers can update rides (accept/complete)." on public.rides
-  for update using (true); -- Ideally stricter checks here
+create policy "Drivers can update rides." on public.rides
+  for update using (true);
 
--- RPC for finding nearest drivers
+-- 7. NEAREST DRIVERS FUNCTION (RPC)
 create or replace function get_nearest_drivers(
   lat float,
   lng float,
@@ -74,7 +81,7 @@ returns table (
   dist_meters float
 )
 language sql
-as $$
+as $function$
   select
     id,
     full_name,
@@ -87,4 +94,4 @@ as $$
     and is_online = true
     and st_dwithin(current_location, st_point(lng, lat)::geography, radius_meters)
   order by dist_meters asc;
-$$;
+$function$;
