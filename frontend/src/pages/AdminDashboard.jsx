@@ -8,12 +8,15 @@ const AdminDashboard = () => {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        fetchData();
+        if (isAdminLoggedIn) fetchData();
         
         // Socket.io Real-time Updates
         const socket = io(import.meta.env.VITE_API_URL, { path: '/socket.io' });
         
-        socket.emit('join_admin');
+        socket.on('connect', () => {
+            console.log("Connected to socket, joining admin room");
+            socket.emit('join_admin');
+        });
 
         socket.on('ride_updated', (updatedRide) => {
             console.log("Admin: Ride Updated", updatedRide);
@@ -54,17 +57,30 @@ const AdminDashboard = () => {
         return () => clearInterval(interval);
     }, []);
 
+    const [error, setError] = useState(null);
+
     const fetchData = async () => {
         setLoading(true);
+        setError(null);
         try {
             const response = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/dashboard`);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP Error: ${response.status} ${response.statusText}`);
+            }
+
+            const contentType = response.headers.get("content-type");
+            if (!contentType || !contentType.includes("application/json")) {
+                throw new Error("Critical Config Error: Received HTML instead of JSON. \nYour 'VITE_API_URL' is likely pointing to the Frontend URL instead of the Backend URL.");
+            }
+
             const data = await response.json();
             
             if (data.rides) setRides(data.rides);
             if (data.drivers) setDrivers(data.drivers);
         } catch (error) {
             console.error("Error fetching dashboard data:", error);
-            // alert("Failed to load dashboard data"); // Silenced repeated alerts
+            setError(error.message);
         } finally {
             setLoading(false);
         }
@@ -114,6 +130,49 @@ const AdminDashboard = () => {
         }
     };
 
+    const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
+    const [adminUser, setAdminUser] = useState('');
+    const [adminPass, setAdminPass] = useState('');
+
+    const handleAdminLogin = (e) => {
+        e.preventDefault();
+        if (adminUser === 'jijahaiadmin' && adminPass === 'jijajiKeShamneKoeBolSaktaHaiKya') {
+            setIsAdminLoggedIn(true);
+            fetchData(); // Fetch only after login
+        } else {
+            alert("Galat password! Jijaji naraz ho jayenge!");
+        }
+    };
+
+    if (!isAdminLoggedIn) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
+                <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
+                    <h1 className="text-2xl font-black mb-6 text-center">Admin Access</h1>
+                    <form onSubmit={handleAdminLogin} className="space-y-4">
+                        <input 
+                            type="text" 
+                            placeholder="Admin ID" 
+                            className="w-full p-3 border rounded-lg"
+                            value={adminUser}
+                            onChange={e => setAdminUser(e.target.value)}
+                        />
+                        <input 
+                            type="password" 
+                            placeholder="Password" 
+                            className="w-full p-3 border rounded-lg"
+                            value={adminPass}
+                            onChange={e => setAdminPass(e.target.value)}
+                        />
+                        <button type="submit" className="w-full bg-black text-white py-3 rounded-xl font-bold">
+                            Enter Secret Chamber
+                        </button>
+                    </form>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="min-h-screen bg-gray-100 p-8">
             <h1 className="text-3xl font-bold mb-8">PanVel Admin</h1>
@@ -137,6 +196,14 @@ const AdminDashboard = () => {
                     <button type="submit" className="bg-black text-white px-4 py-2 rounded font-bold hover:bg-gray-800">Create Partner</button>
                 </form>
             </div>
+
+            {error && (
+                <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4">
+                    <strong className="font-bold">Error Loading Data: </strong>
+                    <span className="block sm:inline">{error}</span>
+                    <p className="text-xs mt-1">Check Render "Backend" Service Logs or CORS settings.</p>
+                </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 {/* Active Rides */}
