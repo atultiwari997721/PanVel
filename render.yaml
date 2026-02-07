@@ -1,5 +1,5 @@
 services:
-  # Backend Service
+  # Backend Service (Web Service)
   - type: web
     name: panvel-backend
     env: node
@@ -12,21 +12,4 @@ services:
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: CLIENT_URL
-        fromService:
-          type: web
-          name: panvel-frontend
-          property: url
-
-  # Frontend Service
-  - type: web
-    name: panvel-frontend
-    env: static
-    plan: free
-    buildCommand: cd frontend && npm install && npm run build
-    staticPublishPath: frontend/dist
-    envVars:
-      - key: VITE_API_URL
-        fromService:
-          type: web
-          name: panvel-backend
-          property: url
+        sync: false # Set this MANUALLY to your Vercel URL after deploying frontend

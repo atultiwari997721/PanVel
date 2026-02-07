@@ -19,7 +19,14 @@ const io = new Server(server, {
 // Middleware
 const clientUrl = process.env.CLIENT_URL || "http://localhost:5173";
 app.use(cors({
-    origin: [clientUrl, "http://localhost:5173", "http://127.0.0.1:5173", "https://panvel-frontend.onrender.com"], // Add your render domain here if known, else use CLIENT_URL
+    origin: function (origin, callback) {
+        // Allow mobile apps, local dev, specific client URL, and Vercel deployments
+        if (!origin || origin === clientUrl || origin === 'http://localhost:5173' || origin === 'http://127.0.0.1:5173' || origin.endsWith('.vercel.app') || origin.endsWith('.onrender.com')) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true
 }));
 app.use(express.json());
